@@ -1,5 +1,5 @@
 package com.mlsdev.rximagepicker
 
 enum class Sources {
-    CAMERA, GALLERY, DOCUMENTS, CHOOSER
+    CAMERA, GALLERY, DOCUMENTS, CHOOSER, FILES
 }

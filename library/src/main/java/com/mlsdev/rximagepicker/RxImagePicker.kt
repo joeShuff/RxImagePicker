@@ -19,29 +19,43 @@ import io.reactivex.subjects.PublishSubject
 import java.text.SimpleDateFormat
 import java.util.*
 import android.content.ComponentName
+import java.lang.NullPointerException
 
 class RxImagePicker : Fragment() {
 
     private lateinit var attachedSubject: PublishSubject<Boolean>
-    private lateinit var publishSubject: PublishSubject<Uri>
-    private lateinit var publishSubjectMultipleImages: PublishSubject<List<Uri>>
+    private lateinit var publishUrisSubject: PublishSubject<List<Uri>>
     private lateinit var canceledSubject: PublishSubject<Int>
 
     private var allowMultipleImages = false
     private var imageSource: Sources? = null
     private var chooserTitle: String? = null
 
-    fun requestImage(source: Sources, chooserTitle: String?): Observable<Uri> {
+    fun requestImage(source: Sources, chooserTitle: String?): Observable<List<Uri>> {
         this.chooserTitle = chooserTitle
         return requestImage(source)
     }
 
-    fun requestImage(source: Sources): Observable<Uri> {
+    /**
+     * To choose multiple mime types, look at the answer here. Cant write it because it uses stars. Thanks Kotlin comments
+     *
+     * https://stackoverflow.com/questions/1698050/multiple-mime-types-in-android
+     ***/
+    fun requestFiles(allowMultiple: Boolean = false, requestFileTypes: String = "*/*") : Observable<List<Uri>> {
+        initSubjects()
+        allowMultipleImages = allowMultiple
+        fileTypes = requestFileTypes
+        imageSource = Sources.FILES
+        requestPickImage()
+        return publishUrisSubject.takeUntil(canceledSubject)
+    }
+
+    fun requestImage(source: Sources): Observable<List<Uri>> {
         initSubjects()
         allowMultipleImages = false
         imageSource = source
         requestPickImage()
-        return publishSubject.takeUntil(canceledSubject)
+        return publishUrisSubject.takeUntil(canceledSubject)
     }
 
     @TargetApi(Build.VERSION_CODES.JELLY_BEAN_MR2)
@@ -50,7 +64,7 @@ class RxImagePicker : Fragment() {
         imageSource = Sources.GALLERY
         allowMultipleImages = true
         requestPickImage()
-        return publishSubjectMultipleImages.takeUntil(canceledSubject)
+        return publishUrisSubject.takeUntil(canceledSubject)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -59,17 +73,15 @@ class RxImagePicker : Fragment() {
     }
 
     private fun initSubjects(){
-        publishSubject = PublishSubject.create()
         attachedSubject = PublishSubject.create()
         canceledSubject = PublishSubject.create()
-        publishSubjectMultipleImages = PublishSubject.create()
+        publishUrisSubject = PublishSubject.create()
     }
 
     override fun onAttach(context: Context?) {
         super.onAttach(context)
         if (::attachedSubject.isInitialized.not() or
-                ::publishSubject.isInitialized.not() or
-                ::publishSubjectMultipleImages.isInitialized.not() or
+                ::publishUrisSubject.isInitialized.not() or
                 ::canceledSubject.isInitialized.not()){
             initSubjects()
         }
@@ -86,10 +98,10 @@ class RxImagePicker : Fragment() {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         if (resultCode == RESULT_OK) {
             when (requestCode) {
-                SELECT_PHOTO -> handleGalleryResult(data)
-                TAKE_PHOTO -> onImagePicked(cameraPictureUrl)
+                SELECT_FILE -> handleGalleryResult(data)
+                TAKE_PHOTO -> cameraPictureUrl?.let { onFilesPicked(arrayListOf(it)) }
                 CHOOSER -> if (isPhoto(data)) {
-                    onImagePicked(cameraPictureUrl)
+                    cameraPictureUrl?.let { onFilesPicked(arrayListOf(it)) }
                 } else {
                     handleGalleryResult(data)
                 }
@@ -104,19 +116,23 @@ class RxImagePicker : Fragment() {
     }
 
     private fun handleGalleryResult(data: Intent?) {
-        if (allowMultipleImages) {
-            val imageUris = ArrayList<Uri>()
-            val clipData = data!!.clipData
-            if (clipData != null) {
-                for (i in 0 until clipData.itemCount) {
-                    imageUris.add(clipData.getItemAt(i).uri)
-                }
-            } else {
-                imageUris.add(data.data)
-            }
-            onImagesPicked(imageUris)
+        if (data == null) {
+            publishUrisSubject.onError(NullPointerException("Intent is null"))
         } else {
-            onImagePicked(data!!.data)
+            data.let {
+                if (it.data == null) {
+                    val imageUris = ArrayList<Uri>()
+                    val clipData = it.clipData
+                    if (clipData != null) {
+                        for (i in 0 until clipData.itemCount) {
+                            imageUris.add(clipData.getItemAt(i).uri)
+                        }
+                    }
+                    onFilesPicked(imageUris)
+                } else {
+                    onFilesPicked(arrayListOf(it.data))
+                }
+            }
         }
     }
 
@@ -146,11 +162,15 @@ class RxImagePicker : Fragment() {
             }
             Sources.GALLERY -> {
                 pictureChooseIntent = createPickFromGalleryIntent()
-                chooseCode = SELECT_PHOTO
+                chooseCode = SELECT_FILE
             }
             Sources.DOCUMENTS -> {
                 pictureChooseIntent = createPickFromDocumentsIntent()
-                chooseCode = SELECT_PHOTO
+                chooseCode = SELECT_FILE
+            }
+            Sources.FILES -> {
+                pictureChooseIntent = createPickFromDocumentsIntent(fileTypes)
+                chooseCode = SELECT_FILE
             }
             Sources.CHOOSER -> {
                 pictureChooseIntent = createChooserIntent(chooserTitle)
@@ -191,7 +211,7 @@ class RxImagePicker : Fragment() {
         return pictureChooseIntent
     }
 
-    private fun createPickFromDocumentsIntent(): Intent {
+    private fun createPickFromDocumentsIntent(type: String = "image/*"): Intent {
         val pictureChooseIntent: Intent
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
             pictureChooseIntent = Intent(Intent.ACTION_OPEN_DOCUMENT)
@@ -202,7 +222,7 @@ class RxImagePicker : Fragment() {
         }
         pictureChooseIntent.putExtra(Intent.EXTRA_LOCAL_ONLY, true)
         pictureChooseIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        pictureChooseIntent.type = "image/*"
+        pictureChooseIntent.type = type
         return pictureChooseIntent
     }
 
@@ -233,24 +253,19 @@ class RxImagePicker : Fragment() {
         }
     }
 
-    private fun onImagesPicked(uris: List<Uri>) {
-        publishSubjectMultipleImages.onNext(uris)
-        publishSubjectMultipleImages.onComplete()
-    }
-
-    private fun onImagePicked(uri: Uri?) {
-        publishSubject.onNext(uri!!)
-        publishSubject.onComplete()
+    private fun onFilesPicked(uris: List<Uri>) {
+        publishUrisSubject.onNext(uris)
+        publishUrisSubject.onComplete()
     }
 
     companion object {
-
-        private const val SELECT_PHOTO = 100
+        private const val SELECT_FILE = 100
         private const val TAKE_PHOTO = 101
         private const val CHOOSER = 102
 
         private val TAG = RxImagePicker::class.java.simpleName
         private var cameraPictureUrl: Uri? = null
+        private var fileTypes: String = "*/*"
 
         fun with(fragmentManager: FragmentManager): RxImagePicker {
             var rxImagePickerFragment = fragmentManager.findFragmentByTag(TAG) as RxImagePicker?
