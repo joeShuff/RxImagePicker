@@ -3,6 +3,7 @@ package com.mlsdev.sample
 import android.graphics.Bitmap
 import android.os.Bundle
 import android.os.Environment
+import android.util.Log
 import android.widget.ImageView
 import android.widget.RadioGroup
 import android.widget.Toast
@@ -14,6 +15,7 @@ import com.mlsdev.rximagepicker.RxImageConverters
 import com.mlsdev.rximagepicker.RxImagePicker
 import com.mlsdev.rximagepicker.Sources
 import io.reactivex.Observable
+import kotlinx.android.synthetic.main.activity_main.*
 import java.io.File
 
 class MainActivity : AppCompatActivity() {
@@ -33,6 +35,9 @@ class MainActivity : AppCompatActivity() {
         converterRadioGroup = findViewById(R.id.radio_group)
         converterRadioGroup.check(R.id.radio_uri)
 
+        fab_pick_files.setOnClickListener {
+            pickFiles()
+        }
         fabCamera.setOnClickListener { pickImageFromSource(Sources.CAMERA) }
         fabGallery.setOnClickListener { pickImageFromSource(Sources.GALLERY) }
         fabDocuments.setOnClickListener { pickImageFromSource(Sources.DOCUMENTS) }
@@ -41,17 +46,24 @@ class MainActivity : AppCompatActivity() {
 
     private fun pickImageFromSource(source: Sources) {
         RxImagePicker.with(supportFragmentManager).requestImage(source, getString(R.string.label_pick_image))
-                .flatMap { uri ->
-                    when (converterRadioGroup.checkedRadioButtonId) {
-                        R.id.radio_file -> RxImageConverters.uriToFile(this@MainActivity, uri, createTempFile())
-                        R.id.radio_bitmap -> RxImageConverters.uriToBitmap(this@MainActivity, uri)
-                        else -> Observable.just(uri)
-                    }
-                }
+            .subscribe({
+                onImagePicked(it)
+            }, {
+                Toast.makeText(this@MainActivity, java.lang.String.format("Error: %s", it), Toast.LENGTH_LONG).show()
+            })
+    }
+
+    private fun pickFiles() {
+        RxImagePicker.with(supportFragmentManager)
+                .requestFiles(true)
                 .subscribe({
-                    onImagePicked(it)
-                }, {
-                    Toast.makeText(this@MainActivity, java.lang.String.format("Error: %s", it), Toast.LENGTH_LONG).show()
+                    Log.i("RESPONSE", "Uri received: $it")
+                    Toast.makeText(this, "File: $it chosen", Toast.LENGTH_LONG).show()
+                },
+                {
+                    Log.i("RESPONSE", "Files broke")
+                    it.printStackTrace()
+                    Toast.makeText(this, "Files went wrong", Toast.LENGTH_LONG).show()
                 })
     }
 
@@ -70,5 +82,4 @@ class MainActivity : AppCompatActivity() {
     private fun createTempFile(): File {
         return File(getExternalFilesDir(Environment.DIRECTORY_PICTURES), System.currentTimeMillis().toString() + "_image.jpeg")
     }
-
 }
